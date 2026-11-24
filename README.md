@@ -5,9 +5,20 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local TeleportService = game:GetService("TeleportService")
+local RepStorage = game:GetService("ReplicatedStorage")
 
 local lp = Players.LocalPlayer
-local FILE = "PVPHub_v2_config.json"
+local FILE = "PVPHub_v3_config.json"
+
+-- ================= REMOTES (EDITE AQUI) =================
+-- path: caminho completo, ex: "ReplicatedStorage.Pasta.NomeDoRemote"
+-- arg: Nenhum | Alvo | Posição | Alvo+Posição | Verdadeiro
+local REMOTE_SLOTS = {
+	{path = "", arg = "Nenhum", delay = 0.5},
+	{path = "", arg = "Nenhum", delay = 0.5},
+	{path = "", arg = "Nenhum", delay = 0.5},
+}
+local ARG_MODES = {"Nenhum", "Alvo", "Posição", "Alvo+Posição", "Verdadeiro"}
 
 -- ================= CONFIG =================
 local D = {
@@ -17,20 +28,19 @@ local D = {
 	atkOn = false, atkDelay = 0.1, atkRange = 0, atkNeed = false,
 	follow = false, followDist = 5, orbit = false, orbitRadius = 10, orbitSpeed = 3, orbitY = 0,
 	spec = false, hbOn = false, hbSize = 10,
-	speedOn = false, speed = 32, jumpOn = false, jump = 60, infJump = false,
-	flyOn = false, flySpeed = 60, noclip = false, bhop = false,
-	spinOn = false, spinSpeed = 360, gravOn = false, grav = 100,
-	antiVoid = false, ctp = false,
+	speedOn = false, speed = 32, jumpOn = false, jump = 60, infJump = false, bhop = false,
+	flyOn = false, flySpeed = 60, noclip = false, antiVoid = false,
+	spinOn = false, spinSpeed = 360, gravOn = false, grav = 100, ctp = false,
 	respawnDeath = false, afk = false,
 	espOn = false, espNames = false, espColor = "Vermelho",
 	dotOn = false, dotY = -26, dotSize = 6, fovShow = false,
 	fovOn = false, camFov = 90, fullbright = false, noFog = false, zoom = false,
 	uiScale = 1, uiTransp = 0.2,
 }
-for i = 1, 3 do
-	D["r" .. i .. "Path"] = ""
-	D["r" .. i .. "Arg"] = "Nenhum"
-	D["r" .. i .. "Delay"] = 0.5
+for i, s in ipairs(REMOTE_SLOTS) do
+	D["r" .. i .. "Path"] = s.path
+	D["r" .. i .. "Arg"] = s.arg
+	D["r" .. i .. "Delay"] = s.delay
 	D["r" .. i .. "On"] = false
 end
 
@@ -42,7 +52,7 @@ local function loadFile()
 		if isfile and readfile and isfile(FILE) then
 			local t = HttpService:JSONDecode(readfile(FILE))
 			for k, v in pairs(t) do
-				if D[k] ~= nil and type(v) == type(D[k]) then C[k] = v end
+				if D[k] ~= nil and type(v) == type(D[k]) and v ~= "" then C[k] = v end
 			end
 		end
 	end)
@@ -64,11 +74,12 @@ local function bind(signal, fn)
 	return c
 end
 
-local S = {target = nil, lock = nil, ang = 0, safe = nil, death = nil,
+local S = {target = nil, lock = nil, ang = 0, safe = nil, death = nil, bv = nil,
 	flyUp = false, flyDn = false, spun = false, fbOn = false, nfOn = false}
 local npcs = {}
 local R = {}
 local infoList = {}
+local slotState = {}
 
 local origGrav = workspace.Gravity
 local origLight = {
@@ -91,11 +102,11 @@ local function getParent()
 end
 
 local parent = getParent()
-local old = parent:FindFirstChild("PVPHubV2")
+local old = parent:FindFirstChild("PVPHubV3")
 if old then old:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "PVPHubV2"
+gui.Name = "PVPHubV3"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder = 999
@@ -114,19 +125,69 @@ end
 
 local BLACK = Color3.fromRGB(0, 0, 0)
 local PANEL = Color3.fromRGB(22, 22, 24)
-local TXT = Color3.fromRGB(235, 235, 235)
-local SUB = Color3.fromRGB(150, 150, 155)
+local BTN = Color3.fromRGB(38, 38, 44)
+local TXT = Color3.fromRGB(225, 225, 225)
+local SUB = Color3.fromRGB(140, 140, 145)
 local OFF = Color3.fromRGB(60, 60, 66)
 local ON = Color3.fromRGB(46, 125, 72)
-local KNOB = Color3.fromRGB(240, 240, 240)
+local KNOB = Color3.fromRGB(235, 235, 235)
 local G = Enum.Font.Gotham
 local GB = Enum.Font.GothamBold
+
+local function screenSize()
+	local s = gui.AbsoluteSize
+	if s.X < 1 then
+		local cam = workspace.CurrentCamera
+		s = cam and cam.ViewportSize or Vector2.new(800, 400)
+	end
+	return s
+end
+
+-- ================= TOQUE (ARRASTAR) =================
+local touches = {}
+bind(UIS.InputChanged, function(i)
+	local t = touches[i]
+	if t and t.move then t.move(i.Position) end
+end)
+bind(UIS.InputEnded, function(i)
+	local t = touches[i]
+	if t then
+		touches[i] = nil
+		if t.stop then t.stop() end
+	end
+end)
+
+local function isTouch(i)
+	return i.UserInputType == Enum.UserInputType.Touch
+end
+
+local function drag(handle, target)
+	local st = {moved = false}
+	bind(handle.InputBegan, function(i)
+		if not isTouch(i) then return end
+		st.moved = false
+		local startPos = i.Position
+		local ap = target.AbsolutePosition
+		touches[i] = {move = function(p)
+			local d = p - startPos
+			if d.Magnitude > 8 then st.moved = true end
+			if st.moved then
+				local sz = screenSize()
+				local x = math.clamp((ap.X + d.X) / sz.X, 0, 0.92)
+				local y = math.clamp((ap.Y + d.Y) / sz.Y, 0, 0.9)
+				target.AnchorPoint = Vector2.new(0, 0)
+				target.Position = UDim2.fromScale(x, y)
+			end
+		end}
+	end)
+	return st
+end
 
 -- ================= STATUS =================
 local statusLbl
 local toastLbl = mk("TextLabel", {
 	Size = UDim2.new(0, 280, 0, 28), AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 50), BackgroundColor3 = BLACK,
+	Position = UDim2.new(0.5, 0, 0, 12), BackgroundColor3 = BLACK,
 	BackgroundTransparency = 0.25, TextColor3 = TXT, Font = G, TextSize = 13, Visible = false,
 }, gui)
 corner(toastLbl, 8)
@@ -142,44 +203,19 @@ local function setStatus(msg)
 	end)
 end
 
--- ================= ARRASTAR =================
-local function drag(handle, target)
-	local dragging, start, orig = false, nil, nil
-	local state = {moved = false}
-	bind(handle.InputBegan, function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			state.moved = false
-			start = i.Position
-			orig = target.Position
-			local c
-			c = i.Changed:Connect(function()
-				if i.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					c:Disconnect()
-				end
-			end)
-		end
-	end)
-	bind(UIS.InputChanged, function(i)
-		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-			local d = i.Position - start
-			if d.Magnitude > 6 then state.moved = true end
-			target.Position = UDim2.new(orig.X.Scale, orig.X.Offset + d.X, orig.Y.Scale, orig.Y.Offset + d.Y)
-		end
-	end)
-	return state
-end
-
 -- ================= JANELA =================
+local cam0 = workspace.CurrentCamera
+local vp0 = cam0 and cam0.ViewportSize or Vector2.new(800, 400)
+local autoScale = math.clamp(math.min(vp0.X / 470, vp0.Y / 330), 0.55, 1.3)
+
 local win = mk("Frame", {
-	Name = "Win", Size = UDim2.new(0, 430, 0, 310),
-	Position = UDim2.new(0.5, -215, 0.5, -155),
+	Name = "Win", Size = UDim2.new(0, 420, 0, 290),
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
 	BackgroundColor3 = BLACK, BackgroundTransparency = C.uiTransp, BorderSizePixel = 0,
 }, gui)
 corner(win, 12)
 mk("UIStroke", {Color = Color3.fromRGB(70, 70, 76), Thickness = 1, Transparency = 0.4}, win)
-local uiScale = mk("UIScale", {Scale = C.uiScale}, win)
+local uiScale = mk("UIScale", {Scale = autoScale * C.uiScale}, win)
 
 local titleBar = mk("Frame", {
 	Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = BLACK,
@@ -188,21 +224,21 @@ local titleBar = mk("Frame", {
 corner(titleBar, 12)
 mk("TextLabel", {
 	Size = UDim2.new(1, -100, 1, 0), Position = UDim2.new(0, 12, 0, 0),
-	BackgroundTransparency = 1, Text = "PVP HUB  |  v2", TextColor3 = TXT,
+	BackgroundTransparency = 1, Text = "PVP HUB  |  v3", TextColor3 = TXT,
 	Font = GB, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
 }, titleBar)
 
 local function topBtn(txt, x)
 	local b = mk("TextButton", {
-		Size = UDim2.new(0, 36, 0, 28), Position = UDim2.new(1, x, 0, 4),
+		Size = UDim2.new(0, 38, 0, 28), Position = UDim2.new(1, x, 0, 4),
 		BackgroundColor3 = PANEL, BackgroundTransparency = 0.1, Text = txt,
 		TextColor3 = TXT, Font = GB, TextSize = 16,
 	}, titleBar)
 	corner(b, 7)
 	return b
 end
-local minBtn = topBtn("-", -82)
-local closeBtn = topBtn("X", -42)
+local minBtn = topBtn("-", -88)
+local closeBtn = topBtn("X", -46)
 drag(titleBar, win)
 
 local body = mk("Frame", {
@@ -211,13 +247,13 @@ local body = mk("Frame", {
 }, win)
 
 local side = mk("Frame", {
-	Size = UDim2.new(0, 88, 1, -28), Position = UDim2.new(0, 6, 0, 2),
+	Size = UDim2.new(0, 84, 1, -28), Position = UDim2.new(0, 6, 0, 2),
 	BackgroundTransparency = 1,
 }, body)
 mk("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, side)
 
 local content = mk("Frame", {
-	Size = UDim2.new(1, -102, 1, -28), Position = UDim2.new(0, 96, 0, 2),
+	Size = UDim2.new(1, -98, 1, -28), Position = UDim2.new(0, 92, 0, 2),
 	BackgroundTransparency = 1,
 }, body)
 
@@ -257,16 +293,15 @@ end
 
 -- ================= WIDGETS =================
 local function wSec(page, text)
-	local f = mk("TextLabel", {
+	return mk("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = string.upper(text),
 		TextColor3 = SUB, Font = GB, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
 	}, page)
-	return f
 end
 
 local function rowLabel(row, text, w)
 	return mk("TextLabel", {
-		Size = UDim2.new(1, w or -62, 0, 36), Position = UDim2.new(0, 10, 0, 0),
+		Size = UDim2.new(1, w or -62, 0, 38), Position = UDim2.new(0, 10, 0, 0),
 		BackgroundTransparency = 1, Text = text, TextColor3 = TXT, Font = G, TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 	}, row)
@@ -274,7 +309,7 @@ end
 
 local function wTog(page, label, key, cb)
 	local row = mk("TextButton", {
-		Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = PANEL, BackgroundTransparency = 0.2,
+		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25,
 		Text = "", AutoButtonColor = false,
 	}, page)
 	corner(row, 8)
@@ -308,31 +343,31 @@ end
 
 local function wSld(page, label, key, mn, mx, step, cb)
 	local row = mk("Frame", {
-		Size = UDim2.new(1, 0, 0, 54), BackgroundColor3 = PANEL, BackgroundTransparency = 0.2,
+		Size = UDim2.new(1, 0, 0, 58), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25,
 	}, page)
 	corner(row, 8)
-	local lbl = rowLabel(row, label, -90)
-	lbl.Size = UDim2.new(1, -90, 0, 30)
+	local lbl = rowLabel(row, label, -92)
+	lbl.Size = UDim2.new(1, -92, 0, 34)
 	local box = mk("TextBox", {
-		Size = UDim2.new(0, 64, 0, 22), Position = UDim2.new(1, -74, 0, 5),
+		Size = UDim2.new(0, 66, 0, 24), Position = UDim2.new(1, -76, 0, 6),
 		BackgroundColor3 = BLACK, BackgroundTransparency = 0.3, TextColor3 = TXT,
 		Font = GB, TextSize = 12, ClearTextOnFocus = false, Text = "",
 	}, row)
 	corner(box, 6)
 	local track = mk("Frame", {
-		Size = UDim2.new(1, -20, 0, 6), Position = UDim2.new(0, 10, 0, 40),
+		Size = UDim2.new(1, -20, 0, 6), Position = UDim2.new(0, 10, 0, 44),
 		BackgroundColor3 = OFF, BorderSizePixel = 0,
 	}, row)
 	corner(track, 3)
 	local fill = mk("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = ON, BorderSizePixel = 0}, track)
 	corner(fill, 3)
 	local knob = mk("Frame", {
-		Size = UDim2.new(0, 14, 0, 14), AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.new(0, 16, 0, 16), AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.new(0, 0, 0.5, 0), BackgroundColor3 = KNOB, BorderSizePixel = 0,
 	}, track)
-	corner(knob, 7)
+	corner(knob, 8)
 	local hit = mk("TextButton", {
-		Size = UDim2.new(1, -10, 0, 26), Position = UDim2.new(0, 5, 0, 30),
+		Size = UDim2.new(1, -10, 0, 24), Position = UDim2.new(0, 5, 0, 34),
 		BackgroundTransparency = 1, Text = "",
 	}, row)
 
@@ -352,27 +387,19 @@ local function wSld(page, label, key, mn, mx, step, cb)
 	local function fromX(x)
 		local a = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
 		local v = mn + a * (mx - mn)
-		return math.floor(v / step + 0.5) * step
+		return math.clamp(math.floor(v / step + 0.5) * step, mn, mx)
 	end
-	local dragging = false
 	hit.InputBegan:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			page.ScrollingEnabled = false
-			setv(fromX(i.Position.X))
-		end
-	end)
-	bind(UIS.InputChanged, function(i)
-		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-			setv(fromX(i.Position.X))
-		end
-	end)
-	bind(UIS.InputEnded, function(i)
-		if dragging and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
-			dragging = false
-			page.ScrollingEnabled = true
-			save()
-		end
+		if not isTouch(i) then return end
+		page.ScrollingEnabled = false
+		setv(fromX(i.Position.X))
+		touches[i] = {
+			move = function(p) setv(fromX(p.X)) end,
+			stop = function()
+				page.ScrollingEnabled = true
+				save()
+			end,
+		}
 	end)
 	box.FocusLost:Connect(function()
 		local n = tonumber(box.Text)
@@ -385,13 +412,13 @@ end
 
 local function wCyc(page, label, key, opts, cb)
 	local b = mk("TextButton", {
-		Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = PANEL, BackgroundTransparency = 0.2,
-		TextColor3 = TXT, Font = G, TextSize = 13,
+		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25,
+		TextColor3 = TXT, Font = G, TextSize = 13, Text = "",
 	}, page)
 	corner(b, 8)
 	local function render() b.Text = label .. ":  " .. tostring(C[key]) end
 	b.Activated:Connect(function()
-		local idx = 1
+		local idx = 0
 		for i, o in ipairs(opts) do if o == C[key] then idx = i end end
 		C[key] = opts[(idx % #opts) + 1]
 		render()
@@ -405,7 +432,7 @@ end
 
 local function wBtn(page, label, fn)
 	local b = mk("TextButton", {
-		Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Color3.fromRGB(38, 38, 44),
+		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = BTN,
 		BackgroundTransparency = 0.1, Text = label, TextColor3 = TXT, Font = GB, TextSize = 13,
 	}, page)
 	corner(b, 8)
@@ -424,16 +451,17 @@ end
 
 local function wTxt(page, label, key)
 	local row = mk("Frame", {
-		Size = UDim2.new(1, 0, 0, 58), BackgroundColor3 = PANEL, BackgroundTransparency = 0.2,
+		Size = UDim2.new(1, 0, 0, 62), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25,
 	}, page)
 	corner(row, 8)
 	local l = rowLabel(row, label, -20)
-	l.Size = UDim2.new(1, -20, 0, 24)
+	l.Size = UDim2.new(1, -20, 0, 26)
 	local box = mk("TextBox", {
-		Size = UDim2.new(1, -20, 0, 26), Position = UDim2.new(0, 10, 0, 26),
+		Size = UDim2.new(1, -20, 0, 28), Position = UDim2.new(0, 10, 0, 28),
 		BackgroundColor3 = BLACK, BackgroundTransparency = 0.3, TextColor3 = TXT,
 		Font = G, TextSize = 12, ClearTextOnFocus = false, Text = "",
 		TextXAlignment = Enum.TextXAlignment.Left, PlaceholderText = "ReplicatedStorage.Pasta.Remote",
+		PlaceholderColor3 = SUB,
 	}, row)
 	corner(box, 6)
 	local function render() box.Text = tostring(C[key]) end
@@ -448,7 +476,7 @@ end
 
 local function wLbl(page, fn)
 	local l = mk("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = PANEL, BackgroundTransparency = 0.3,
+		Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = PANEL, BackgroundTransparency = 0.35,
 		Text = "", TextColor3 = TXT, Font = G, TextSize = 12, TextWrapped = true,
 	}, page)
 	corner(l, 8)
@@ -481,6 +509,10 @@ local function alive(m)
 	return nil
 end
 
+local function myRoot()
+	return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+end
+
 local function scanNPC()
 	local t = {}
 	for _, h in ipairs(workspace:GetDescendants()) do
@@ -511,6 +543,11 @@ local function targets()
 		end
 	end
 	return list
+end
+
+local function needTargets()
+	return C.aimOn or C.espOn or C.espNames or C.hbOn or C.follow or C.orbit
+		or C.spec or C.atkNeed or C.atkRange > 0
 end
 
 local function aimPartOf(m)
@@ -568,7 +605,7 @@ local function pick()
 	return best
 end
 
--- ================= HUD (bolinha / FOV) =================
+-- ================= HUD (BOLINHA / FOV) =================
 local dot = mk("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = KNOB,
 	BorderSizePixel = 0, Visible = false,
@@ -592,38 +629,4 @@ local function updateHud()
 	fovRing.Position = UDim2.new(0.5, 0, 0.5, C.dotY)
 end
 
--- ================= LUZ / UI =================
-local function applyLight()
-	if C.fullbright then
-		Lighting.Brightness = 2
-		Lighting.ClockTime = 14
-		Lighting.GlobalShadows = false
-		Lighting.Ambient = Color3.fromRGB(178, 178, 178)
-		Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
-		S.fbOn = true
-	elseif S.fbOn then
-		Lighting.Brightness = origLight.Brightness
-		Lighting.ClockTime = origLight.ClockTime
-		Lighting.GlobalShadows = origLight.GlobalShadows
-		Lighting.Ambient = origLight.Ambient
-		Lighting.OutdoorAmbient = origLight.OutdoorAmbient
-		S.fbOn = false
-	end
-	if C.noFog then
-		Lighting.FogEnd = 1e6
-		S.nfOn = true
-	elseif S.nfOn then
-		Lighting.FogEnd = origLight.FogEnd
-		S.nfOn = false
-	end
-end
-
-local function applyUI()
-	uiScale.Scale = C.uiScale
-	win.BackgroundTransparency = C.uiTransp
-end
-
--- ================= BOTOES DE VOO =================
-local function flyBtn(txt, y, flag)
-	local b = mk("TextButton", {
-		Size = UDim2.new(
+-- ================= LUZ / UI ===============
