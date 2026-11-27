@@ -1,4 +1,4 @@
- local a=game:GetService("Players")local b=game:GetService("RunService")local c=game:GetService("UserInputService")
+local a=game:GetService("Players")local b=game:GetService("RunService")local c=game:GetService("UserInputService")
 local d=game:GetService("TweenService")local e=game:GetService("Workspace")local f=game:GetService("ReplicatedStorage")
 local g=game:GetService("HttpService")local h=a.LocalPlayer;
 local i,j,k,l=UDim2.new,UDim2.fromOffset,Vector3.new,Color3.fromRGB;
